@@ -1,38 +1,49 @@
 FROM debian:bookworm-slim
 
-# 1. Install the list of build dependencies
-RUN apt-get update && apt-get install -y \
+# Dipendenze di sistema e di compilazione
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config \
-    libusb-1.0-0-dev libturbojpeg0-dev libglfw3-dev \
-    git python3 python3-pip \
+    ca-certificates git \
+    libusb-1.0-0-dev libturbojpeg0-dev \
+    python3 python3-dev python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Download and compile the Kinect drivers (CPU ONLY for performance)
-RUN git clone https://github.com/OpenKinect/libfreenect2.git /opt/libfreenect2 \
-    && cd /opt/libfreenect2 \
-    && mkdir build && cd build \
-    && cmake .. -DENABLE_OPENGL=OFF -DENABLE_OPENCL=OFF \
-    && make \
-    && make install \
+# Compilazione libfreenect2 senza backend GPU e senza esempi
+RUN git clone --depth 1 https://github.com/OpenKinect/libfreenect2.git /opt/libfreenect2 \
+    && cmake -S /opt/libfreenect2 -B /opt/libfreenect2/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DENABLE_OPENGL=OFF \
+        -DENABLE_OPENCL=OFF \
+        -DENABLE_CUDA=OFF \
+        -DBUILD_EXAMPLES=OFF \
+    && cmake --build /opt/libfreenect2/build --parallel 2 \
+    && cmake --install /opt/libfreenect2/build \
     && ldconfig
 
-# 3. Install Python libraries in the correct order!
-RUN pip3 install numpy Cython paho-mqtt --break-system-packages || pip3 install numpy Cython paho-mqtt
+# Ambiente Python dedicato
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+ENV LIBFREENECT2_INSTALL_PREFIX=/usr/local
+ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64"
 
-# Bypass the broken PyPI package and install directly from the developer's GitHub
-RUN pip3 install git+https://github.com/r9y9/pylibfreenect2.git --break-system-packages || pip3 install git+https://github.com/r9y9/pylibfreenect2.git
+RUN python3 -m venv /opt/venv \
+    && python -m pip install --no-cache-dir \
+        "pip<25" "setuptools<70" wheel \
+    && python -m pip install --no-cache-dir \
+        "numpy<2" "Cython<3" paho-mqtt
 
-# 4. Set up our working directory (MOVED TO /app TO AVOID HA OVERWRITE)
+# Il setup del wrapper necessita di NumPy e Cython già disponibili
+RUN python -m pip install --no-cache-dir --no-build-isolation \
+    git+https://github.com/r9y9/pylibfreenect2.git
+
+# Verifica dell'estensione Python e delle librerie native
+RUN python -c "import numpy; import paho.mqtt.client; import pylibfreenect2"
+
 WORKDIR /app
-COPY run.sh /app/
-COPY motion.py /app/
+COPY run.sh motion.py /app/
 
-# 5. Scrub Windows line endings and make executable
-RUN sed -i 's/\r$//' /app/run.sh && \
-    sed -i 's/\r$//' /app/motion.py && \
-    chmod a+x /app/run.sh
+RUN sed -i 's/\r$//' /app/run.sh /app/motion.py \
+    && chmod a+x /app/run.sh
 
-# 6. TELL LINUX WHERE THE C++ LIBRARIES ARE HIDDEN
-ENV LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH}"
-
-CMD [ "/bin/bash", "/app/run.sh" ]
+CMD ["/bin/bash", "/app/run.sh"]
