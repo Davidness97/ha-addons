@@ -1,5 +1,8 @@
 #!/bin/bash
+set -e
+
 echo "Starting Kinect V2 Motion Watcher..."
-echo "Waiting for Mosquitto to be ready..."
+echo "Waiting 5 seconds before starting..."
 sleep 5
-python3 -u /app/motion.py
+
+exec /opt/venv/bin/python -u /app/motion.py
